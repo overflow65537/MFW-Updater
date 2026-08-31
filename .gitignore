@@ -6,5 +6,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
-assets/icons/logo.ico
-assets/icons/logo.png
+
+# 脚本生成的图标（来源见 tools/generate_updater_icons.py）
+assets/icons/updater.svg
+assets/icons/updater.ico
+assets/icons/updater.png

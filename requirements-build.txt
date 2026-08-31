@@ -1,2 +1,3 @@
-# 可选：CI / 本地打包前生成 updater.png、updater.ico
-# pillow
+# CI / 本地打包前生成 updater.png、updater.ico
+pillow
+svg.path

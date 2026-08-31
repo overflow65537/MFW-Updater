@@ -4,14 +4,11 @@
 
 ## Lucide `refresh-cw`（ISC）
 
-以下文件直接或间接使用了 Lucide 图标 **`refresh-cw`** 的 SVG 路径数据：
-
-- `assets/icons/updater.svg`
-- `tools/generate_updater_icons.py`（内嵌 SVG 字符串）
+Lucide 图标 **`refresh-cw`** 的 SVG 路径数据定义在 **`tools/generate_updater_icons.py`**（内嵌 `UPDATER_SVG` 与 `LUCIDE_PATHS`）。
 
 来源：[lucide-icons/lucide](https://github.com/lucide-icons/lucide) · [refresh-cw](https://lucide.dev/icons/refresh-cw)
 
-`updater.png` 与 `updater.ico` 由 `tools/generate_updater_icons.py` 程序化绘制生成，视觉上与 `refresh-cw` 一致，但不包含 Lucide 原始路径的逐像素栅格化副本。
+运行生成脚本后会写入 `assets/icons/updater.svg`、`updater.png`、`updater.ico`（均不入 Git，由 CI 或本地打包前生成）。
 
 ## ISC License
 
@@ -38,7 +35,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## 重新生成资源
 
 ```bash
-python -m pip install pillow
+python -m pip install -r requirements-build.txt
 python tools/generate_updater_icons.py
 ```
 
