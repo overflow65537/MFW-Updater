@@ -1,0 +1,10 @@
+build/
+dist/
+*.dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+assets/icons/logo.ico
+assets/icons/logo.png

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mfw-updater"
+description = "MFW-ChainFlow Assistant update helper (sidecar)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "overflow65537", email = "err.overflow@gmail.com" }]
+dependencies = [
+  "psutil",
+  "py7zr",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/overflow65537/MFW-Updater"
+Repository = "https://github.com/overflow65537/MFW-Updater"
+"Main Program" = "https://github.com/overflow65537/MFW-PyQt6"
+
+[tool.setuptools.dynamic]
+version = { attr = "mfw_updater.__version__.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["mfw_updater*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

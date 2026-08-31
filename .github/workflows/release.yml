@@ -1,0 +1,285 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  changelog:
+    name: Generate changelog
+    runs-on: ubuntu-latest
+    outputs:
+      release_body: ${{ steps.git-cliff.outputs.content }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff
+        with:
+          config: cliff.toml
+          args: -vv --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.set_tag.outputs.tag }}
+      is_release: ${{ steps.set_tag.outputs.is_release }}
+      is_prerelease: ${{ steps.set_tag.outputs.is_prerelease }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: set_tag
+        run: |
+          if [[ ${{ github.ref }} =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)?$ ]]; then
+            is_release=true
+            tag=${GITHUB_REF#refs/tags/}
+          else
+            is_release=false
+            tag=$(curl -sX GET "https://api.github.com/repos/${{ github.repository }}/releases/latest" --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' | awk '/tag_name/{print $4}' FS='["]')
+            if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+              tag="v0.0.0"
+            fi
+            tag=$(date "+$tag-%y%m%d-$(git rev-parse --short HEAD)")
+          fi
+          if ! $($is_release) ; then
+            prefix=${tag%-*-*}
+            suffix=${tag#$prefix-}
+            tag="$prefix-ci.$suffix"
+          fi
+          is_prerelease=false
+          if [[ $tag =~ .*alpha.* || $tag =~ .*beta.* || $tag =~ .*rc.* || $tag =~ .*dev.* || $tag =~ .*-ci.* ]]; then
+            is_prerelease=true
+          fi
+          echo tag=$tag | tee -a $GITHUB_OUTPUT
+          echo is_release=$is_release | tee -a $GITHUB_OUTPUT
+          echo is_prerelease=$is_prerelease | tee -a $GITHUB_OUTPUT
+
+  build:
+    needs: meta
+    name: build (${{ matrix.platform }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    env:
+      NUITKA_GIT_REF: "4.2"
+      PRODUCT_NAME: MFW-ChainFlow Updater
+      FILE_DESCRIPTION: MFW-ChainFlow Assistant update helper (sidecar)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win
+            runs-on: windows-latest
+            arch: x86_64
+            python_arch: x64
+          - platform: win
+            runs-on: windows-11-arm
+            arch: aarch64
+            python_arch: arm64
+          - platform: linux
+            runs-on: ubuntu-latest
+            arch: x86_64
+            python_arch: x64
+          - platform: linux
+            runs-on: ubuntu-24.04-arm
+            arch: aarch64
+            python_arch: arm64
+          - platform: macos
+            runs-on: macos-15-intel
+            arch: x86_64
+            python_arch: x64
+            target_arch: x86_64
+          - platform: macos
+            runs-on: macos-latest
+            arch: aarch64
+            python_arch: arm64
+            target_arch: arm64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Generate updater icons
+        run: |
+          python -m pip install pillow
+          python tools/generate_updater_icons.py
+
+      - name: Set __version__ for Nuitka compile
+        env:
+          MFW_VERSION: ${{ needs.meta.outputs.tag }}
+        run: python -c "import os; open('mfw_updater/__version__.py','w',encoding='utf-8').write('__version__ = %r\n' % os.environ['MFW_VERSION'])"
+
+      - name: Compute executable version metadata
+        id: exe_meta
+        shell: python
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ.get("TAG", "v0.0.0").strip()
+          core = tag[1:] if tag.startswith("v") else tag
+          match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?", core)
+          parts = [g for g in (match.groups() if match else ()) if g is not None]
+          if not parts:
+              parts = ["0"]
+          while len(parts) < 4:
+              parts.append("0")
+          win_ver = ".".join(parts[:4])
+          out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
+          with out.open("a", encoding="utf-8") as handle:
+              handle.write(f"win_file_version={win_ver}\n")
+              handle.write(f"win_product_version={win_ver}\n")
+
+      - name: Nuitka standalone build (Windows)
+        if: matrix.platform == 'win'
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: ${{ env.NUITKA_GIT_REF }}
+          script-name: updater.py
+          mode: standalone
+          lto: no
+          caching-key: mfw-updater-standalone-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.python_arch }}
+          output-file: MFWUpdater
+          windows-console-mode: force
+          windows-icon-from-ico: ./assets/icons/updater.ico
+          company-name: ${{ github.repository_owner }}
+          product-name: ${{ env.PRODUCT_NAME }}
+          file-version: ${{ steps.exe_meta.outputs.win_file_version }}
+          product-version: ${{ steps.exe_meta.outputs.win_product_version }}
+          file-description: ${{ env.FILE_DESCRIPTION }}
+          copyright: "Copyright (C) ${{ github.repository_owner }} and contributors. Licensed under MIT."
+
+      - name: Nuitka standalone build (Linux)
+        if: matrix.platform == 'linux'
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: ${{ env.NUITKA_GIT_REF }}
+          script-name: updater.py
+          mode: standalone
+          lto: no
+          caching-key: mfw-updater-standalone-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.python_arch }}
+          output-file: MFWUpdater
+          linux-icon: ./assets/icons/updater.png
+          company-name: ${{ github.repository_owner }}
+          product-name: ${{ env.PRODUCT_NAME }}
+          file-version: ${{ steps.exe_meta.outputs.win_file_version }}
+          product-version: ${{ steps.exe_meta.outputs.win_product_version }}
+          file-description: ${{ env.FILE_DESCRIPTION }}
+          copyright: "Copyright (C) ${{ github.repository_owner }} and contributors. Licensed under MIT."
+
+      - name: Nuitka standalone build (macOS)
+        if: matrix.platform == 'macos'
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: ${{ env.NUITKA_GIT_REF }}
+          script-name: updater.py
+          mode: standalone
+          lto: no
+          caching-key: mfw-updater-standalone-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.python_arch }}
+          output-file: MFWUpdater
+          macos-target-arch: ${{ matrix.target_arch }}
+          company-name: ${{ github.repository_owner }}
+          product-name: ${{ env.PRODUCT_NAME }}
+          file-version: ${{ steps.exe_meta.outputs.win_file_version }}
+          product-version: ${{ steps.exe_meta.outputs.win_product_version }}
+          file-description: ${{ env.FILE_DESCRIPTION }}
+          copyright: "Copyright (C) ${{ github.repository_owner }} and contributors. Licensed under MIT."
+
+      - name: Normalize updater executable name (Linux/macOS)
+        if: matrix.platform != 'win'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="build/updater.dist"
+          if [[ -f "$dist/updater" && ! -f "$dist/MFWUpdater" ]]; then
+            mv "$dist/updater" "$dist/MFWUpdater"
+          fi
+          chmod +x "$dist/MFWUpdater"
+
+      - name: Normalize updater executable name (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $dist = Join-Path "build" "updater.dist"
+          $target = Join-Path $dist "MFWUpdater.exe"
+          if (-not (Test-Path -LiteralPath $target)) {
+            $legacy = Join-Path $dist "updater.exe"
+            if (Test-Path -LiteralPath $legacy) {
+              Rename-Item -LiteralPath $legacy -NewName "MFWUpdater.exe" -Force
+            } else {
+              Write-Error "missing updater executable in $dist"
+              Get-ChildItem -LiteralPath $dist
+              exit 1
+            }
+          }
+
+      - name: Package standalone dist (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $dist = Join-Path "build" "updater.dist"
+          $outDir = Join-Path "build" "release"
+          New-Item -ItemType Directory -Force $outDir | Out-Null
+          $out = Join-Path $outDir "MFWUpdater-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          Compress-Archive -Path (Join-Path $dist '*') -DestinationPath $out -Force
+
+      - name: Package standalone dist (Unix)
+        if: matrix.platform != 'win'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release
+          tar -czf "build/release/MFWUpdater-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" -C build/updater.dist .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: MFWUpdater-${{ matrix.platform }}-${{ matrix.arch }}
+          path: build/release/*
+          if-no-files-found: error
+
+  release:
+    if: needs.meta.outputs.is_release == 'true'
+    needs: [meta, changelog, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          body: ${{ needs.changelog.outputs.release_body }}
+          prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: assets/*
