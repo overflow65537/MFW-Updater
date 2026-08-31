@@ -1,20 +1,39 @@
-# 更新器图标
+# 更新器图标归属
 
 发行版使用 **`updater.png` / `updater.ico`**（蓝色圆角底 + 白色循环箭头），视觉语义为「刷新 / 更新」，与主程序 logo 区分。
 
-## 推荐的开源图标库
+## Lucide `refresh-cw`（ISC）
 
-以下项目均可免费用于开源软件（发布时请保留对应许可证说明）：
+以下文件直接或间接使用了 Lucide 图标 **`refresh-cw`** 的 SVG 路径数据：
 
-| 项目 | 许可证 | 链接 | 适合更新器的图标示例 |
-|------|--------|------|----------------------|
-| **Lucide** | ISC | https://lucide.dev | `refresh-cw`、`download`、`package-down` |
-| **Phosphor Icons** | MIT | https://phosphoricons.com | `arrows-clockwise`、`download-simple` |
-| **Tabler Icons** | MIT | https://tabler.io/icons | `refresh`、`cloud-download` |
-| **Material Symbols** | Apache-2.0 | https://fonts.google.com/icons | `sync`、`download` |
-| **Feather Icons** | MIT | https://feathericons.com | `refresh-cw`、`download` |
+- `assets/icons/updater.svg`
+- `tools/generate_updater_icons.py`（内嵌 SVG 字符串）
 
-当前 `updater.svg` 中的路径来自 **Lucide `refresh-cw`**（ISC），见 https://github.com/lucide-icons/lucide .
+来源：[lucide-icons/lucide](https://github.com/lucide-icons/lucide) · [refresh-cw](https://lucide.dev/icons/refresh-cw)
+
+`updater.png` 与 `updater.ico` 由 `tools/generate_updater_icons.py` 程序化绘制生成，视觉上与 `refresh-cw` 一致，但不包含 Lucide 原始路径的逐像素栅格化副本。
+
+## ISC License
+
+本目录中与 Lucide `refresh-cw` 相关的 SVG 路径数据，遵循 Lucide 项目的 ISC 许可证。分发时须保留下列版权声明与许可全文：
+
+```text
+ISC License
+
+Copyright (c) Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
 
 ## 重新生成资源
 
@@ -29,4 +48,4 @@ python tools/generate_updater_icons.py
 
 - **Windows**：`--windows-icon-from-ico=updater.ico`，资源管理器中可见独立图标。
 - **Linux**：`--linux-icon=updater.png`。
-- **macOS**：更新器为 **standalone 控制台二进制**，**不打包为 `.app`**；Finder 中通常仍显示通用终端/可执行文件图标，对后台 sidecar 进程足够。若强行 `--macos-create-app-bundle`，启动路径需改为 `MFWUpdater.app/Contents/MacOS/MFWUpdater`，与主程序现有组装逻辑不一致，故不推荐。
+- **macOS**：更新器为 standalone 控制台二进制，不打包为 `.app`；Finder 中通常仍显示通用可执行文件图标。
