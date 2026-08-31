@@ -133,6 +133,8 @@ jobs:
 
       - name: Compute executable version metadata
         id: exe_meta
+        env:
+          PYTHONPATH: .
         shell: python
         run: |
           import os
