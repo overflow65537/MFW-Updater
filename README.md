@@ -1,14 +1,6 @@
-<!-- markdownlint-disable MD033 MD041 -->
-<p align="center">
-  <img alt="LOGO" src="assets/icons/updater.png" width="256" height="256" />
-</p>
-<div align="center">
-
 # MFW-ChainFlow Updater
 
 **[简体中文](./README.md) | [English](./README-en.md)**
-
-</div>
 
 ## 这是什么
 
