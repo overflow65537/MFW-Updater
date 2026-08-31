@@ -134,26 +134,16 @@ jobs:
       - name: Compute executable version metadata
         id: exe_meta
         shell: python
-        env:
-          TAG: ${{ needs.meta.outputs.tag }}
         run: |
           import os
           import pathlib
-          import re
 
-          tag = os.environ.get("TAG", "v0.0.0").strip()
-          core = tag[1:] if tag.startswith("v") else tag
-          match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?", core)
-          parts = [g for g in (match.groups() if match else ()) if g is not None]
-          if not parts:
-              parts = ["0"]
-          while len(parts) < 4:
-              parts.append("0")
-          win_ver = ".".join(parts[:4])
+          from mfw_updater.product_meta import FILE_VERSION, PRODUCT_VERSION
+
           out = pathlib.Path(os.environ["GITHUB_OUTPUT"])
           with out.open("a", encoding="utf-8") as handle:
-              handle.write(f"win_file_version={win_ver}\n")
-              handle.write(f"win_product_version={win_ver}\n")
+              handle.write(f"win_file_version={FILE_VERSION}\n")
+              handle.write(f"win_product_version={PRODUCT_VERSION}\n")
 
       - name: Nuitka standalone build (Windows)
         if: matrix.platform == 'win'
