@@ -9,9 +9,10 @@ from unittest.mock import patch
 import updater
 
 
-def _write_app(root: Path, version: str) -> Path:
-    app = root / "MFW.app"
-    executable = app / "Contents" / "MacOS" / "MFW"
+def _write_app(root: Path, version: str, *, app_name: str = "MFW.app") -> Path:
+    app = root / app_name
+    executable_name = Path(app_name).stem
+    executable = app / "Contents" / "MacOS" / executable_name
     executable.parent.mkdir(parents=True)
     executable.write_text(version, encoding="utf-8")
     (app / "Contents" / "Info.plist").write_text(
@@ -21,6 +22,10 @@ def _write_app(root: Path, version: str) -> Path:
 
 
 class AppBundleUpdateTests(unittest.TestCase):
+    def tearDown(self):
+        updater.RUNTIME_OPTS.mfw_exe_path = None
+        updater.RUNTIME_OPTS.startup_executable_name = None
+
     def test_zip_extraction_preserves_executable_mode(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -79,7 +84,7 @@ class AppBundleUpdateTests(unittest.TestCase):
         self.assertTrue(updater._path_is_supported_update_package("update.zip"))
         self.assertFalse(updater._path_is_supported_update_package("notes.txt"))
 
-    def test_replaces_app_and_runtime_but_preserves_user_data(self):
+    def test_replaces_app_atomically_and_overlays_runtime(self):
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             install_root = base / "install"
@@ -90,16 +95,19 @@ class AppBundleUpdateTests(unittest.TestCase):
             _write_app(payload, "new")
             (install_root / "maafw").mkdir()
             (install_root / "maafw" / "old.dylib").write_text("old")
+            (install_root / "resource").mkdir()
+            (install_root / "resource" / "keep.bin").write_text("keep")
             (payload / "maafw").mkdir()
             (payload / "maafw" / "new.dylib").write_text("new")
+            (payload / "resource").mkdir()
+            (payload / "resource" / "new.bin").write_text("new")
             (payload / "MFWUpdater").mkdir()
             (payload / "MFWUpdater" / "MFWUpdater").write_text("updater")
 
-            for name in ("config", "bundle", "resource", "update"):
+            for name in ("config", "debug", "update", "MFWUpdater1"):
                 directory = install_root / name
                 directory.mkdir()
                 (directory / "keep.txt").write_text("keep")
-            (install_root / "interface.json").write_text("{}")
 
             self.assertTrue(
                 updater._replace_app_bundle_atomic(payload, install_root)
@@ -115,11 +123,64 @@ class AppBundleUpdateTests(unittest.TestCase):
                 "new",
             )
             self.assertTrue((install_root / "maafw" / "new.dylib").is_file())
-            self.assertFalse((install_root / "maafw" / "old.dylib").exists())
+            # 普通覆盖/合并：包内未提供的同级文件可保留（resource 半包语义）
+            self.assertTrue((install_root / "resource" / "keep.bin").is_file())
+            self.assertTrue((install_root / "resource" / "new.bin").is_file())
             self.assertTrue((install_root / "MFWUpdater" / "MFWUpdater").is_file())
-            self.assertTrue((install_root / "interface.json").is_file())
-            for name in ("config", "bundle", "resource", "update"):
+            for name in ("config", "debug", "update", "MFWUpdater1"):
                 self.assertTrue((install_root / name / "keep.txt").is_file())
+
+    def test_uses_mfw_exe_path_app_bundle_name(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            install_root = base / "install"
+            payload = base / "payload"
+            install_root.mkdir()
+            payload.mkdir()
+            installed = _write_app(install_root, "old", app_name="FOS.app")
+            _write_app(payload, "new", app_name="FOS.app")
+            (payload / "resource").mkdir()
+            (payload / "resource" / "a.txt").write_text("a")
+
+            updater.RUNTIME_OPTS.mfw_exe_path = str(
+                installed / "Contents" / "MacOS" / "FOS"
+            )
+            self.assertTrue(
+                updater._replace_app_bundle_atomic(payload, install_root)
+            )
+            self.assertEqual(
+                (
+                    install_root / "FOS.app" / "Contents" / "MacOS" / "FOS"
+                ).read_text(),
+                "new",
+            )
+            self.assertFalse((install_root / "MFW.app").exists())
+            self.assertTrue((install_root / "resource" / "a.txt").is_file())
+
+    def test_maps_package_default_app_onto_runtime_name(self):
+        """包内仍是默认名时，安装到 --mfw-exe-path 对应的目标 .app 名。"""
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            install_root = base / "install"
+            payload = base / "payload"
+            install_root.mkdir()
+            payload.mkdir()
+            installed = _write_app(install_root, "old", app_name="FOS.app")
+            _write_app(payload, "new", app_name="MFW.app")
+
+            updater.RUNTIME_OPTS.mfw_exe_path = str(
+                installed / "Contents" / "MacOS" / "FOS"
+            )
+            self.assertTrue(
+                updater._replace_app_bundle_atomic(payload, install_root)
+            )
+            self.assertEqual(
+                (
+                    install_root / "FOS.app" / "Contents" / "MacOS" / "MFW"
+                ).read_text(),
+                "new",
+            )
+            self.assertFalse((install_root / "MFW.app").exists())
 
     def test_rolls_back_when_staging_cannot_be_installed(self):
         with tempfile.TemporaryDirectory() as raw:
