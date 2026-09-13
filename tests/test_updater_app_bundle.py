@@ -250,6 +250,51 @@ class AppBundleUpdateTests(unittest.TestCase):
             popen.assert_called_once()
             self.assertEqual(popen.call_args.kwargs["cwd"], str(root))
 
+    def test_ensure_install_root_cwd_from_updater_subdir(self):
+        """从 MFWUpdater1/ 启动时，应 chdir 到发行根。"""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            updater_dir = root / "MFWUpdater1"
+            updater_dir.mkdir()
+            fos = root / "FOS.exe"
+            fos.touch()
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(updater_dir)
+                updater.RUNTIME_OPTS.mfw_exe_path = str(fos)
+                resolved = updater.ensure_install_root_cwd()
+                self.assertEqual(resolved, root.resolve())
+                self.assertEqual(Path.cwd().resolve(), root.resolve())
+            finally:
+                updater.RUNTIME_OPTS.mfw_exe_path = None
+                os.chdir(original_cwd)
+
+    def test_setup_update_logger_writes_under_install_root(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            wrong_cwd = root / "MFWUpdater1"
+            wrong_cwd.mkdir()
+            original_cwd = Path.cwd()
+            logger = None
+            try:
+                os.chdir(wrong_cwd)
+                logger = updater.setup_update_logger(root)
+                log_path = root / "debug" / "updater.log"
+                self.assertTrue(log_path.exists())
+                self.assertFalse((wrong_cwd / "debug" / "updater.log").exists())
+                logger.info("cwd-guard-test")
+                for handler in list(logger.handlers):
+                    handler.flush()
+                self.assertIn("cwd-guard-test", log_path.read_text(encoding="utf-8"))
+            finally:
+                if logger is not None:
+                    for handler in list(logger.handlers):
+                        handler.close()
+                    logger.handlers.clear()
+                os.chdir(original_cwd)
+                # 必须先回到原 cwd，再重绑模块级 logger，避免把 handler 留在临时目录
+                updater.update_logger = updater.setup_update_logger()
+
 
 if __name__ == "__main__":
     unittest.main()

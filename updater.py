@@ -34,6 +34,7 @@ from mfw_updater.install_paths import (
     DEFAULT_APP_EXECUTABLE_NAME,
     is_app_bundle_layout,
     resolve_app_bundle_dir,
+    resolve_install_root,
     resolve_macos_executable_in_app,
     resolve_main_executable,
     resolve_updater_dir,
@@ -685,12 +686,43 @@ def generate_metadata_samples(target_dir: str | Path | None = None):
             update_logger.error(f"写入元数据失败: {exc}")
 
 
-def setup_update_logger():
-    debug_dir = Path("debug")
-    debug_dir.mkdir(exist_ok=True)
+def resolve_updater_install_root() -> Path:
+    """解析发行根：优先 ``--mfw-exe-path``，否则由更新器自身路径推断。"""
+    if RUNTIME_OPTS.mfw_exe_path:
+        return resolve_install_root(RUNTIME_OPTS.mfw_exe_path)
+    return resolve_install_root()
+
+
+def ensure_install_root_cwd() -> Path:
+    """将进程 cwd 切到发行根，避免从 ``MFWUpdater1/`` 启动时找不到更新包。"""
+    install_root = resolve_updater_install_root()
+    current = Path.cwd().resolve()
+    if current != install_root:
+        os.chdir(install_root)
+    return install_root
+
+
+def setup_update_logger(install_root: Path | str | None = None):
+    """配置更新器日志。
+
+    显式传入 ``install_root`` 时写入发行根 ``debug/updater.log``；
+    导入期未指定时先落在当前 cwd，待 ``_bootstrap_install_root_and_logger`` 再重绑。
+    """
+    root = (
+        Path(install_root).resolve()
+        if install_root is not None
+        else Path.cwd().resolve()
+    )
+    debug_dir = root / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
     log_path = debug_dir / "updater.log"
     updater_logger = logging.getLogger("updater")
     updater_logger.setLevel(logging.DEBUG)
+    for handler in list(updater_logger.handlers):
+        try:
+            handler.close()
+        except Exception:
+            pass
     updater_logger.handlers.clear()
     rotating_handler = TimedRotatingFileHandler(
         log_path,
@@ -2263,7 +2295,9 @@ def standard_update():
     """
     标准更新模式
     """
-    update_logger.info("标准更新模式开始")
+    # 兜底：即便启动方传错 cwd，也先切到发行根再找包
+    install_root = ensure_install_root_cwd()
+    update_logger.info("标准更新模式开始, cwd=%s", install_root)
     # 检查MFW是否在运行
     if not ensure_mfw_not_running():
         return
@@ -2423,74 +2457,109 @@ def recovery_mode():
     print("程序已重启")
 
 
+def _parse_update_runtime_opts(argv: list[str]) -> None:
+    """解析 ``-update`` 后的运行时参数到 ``RUNTIME_OPTS``。"""
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=None,
+        help="触发更新器的主程序PID（用于精确等待退出）",
+    )
+    parser.add_argument(
+        "--parent-create-time",
+        type=float,
+        default=None,
+        help="主程序进程创建时间（防 PID 复用误判）",
+    )
+    parser.add_argument(
+        "--shutdown-timeout",
+        type=float,
+        default=180.0,
+        help="等待主程序/占用进程退出的超时时间（秒）",
+    )
+    parser.add_argument(
+        "--wait-poll",
+        type=float,
+        default=0.25,
+        help="等待轮询间隔（秒）",
+    )
+    parser.add_argument(
+        "--mfw-exe-path",
+        type=str,
+        default=None,
+        help="主程序可执行文件路径（更可靠的占用检测）",
+    )
+    parser.add_argument(
+        "--startup-executable-name",
+        type=str,
+        default=None,
+        help="触发更新时的主程序文件名（用于更新后恢复原名称）",
+    )
+    # 兼容透传给主程序的 --direct-run（更新器自身不消费，但不能因未知参数失败）
+    parser.add_argument(FLAG_DIRECT_RUN, action="store_true")
+
+    known, _unknown = parser.parse_known_args(argv)
+    RUNTIME_OPTS.parent_pid = known.parent_pid
+    RUNTIME_OPTS.parent_create_time = known.parent_create_time
+    RUNTIME_OPTS.shutdown_timeout = float(known.shutdown_timeout)
+    RUNTIME_OPTS.wait_poll_interval = float(known.wait_poll)
+    RUNTIME_OPTS.mfw_exe_path = known.mfw_exe_path
+    RUNTIME_OPTS.startup_executable_name = known.startup_executable_name
+
+
+def _bootstrap_install_root_and_logger() -> Path:
+    """先切到发行根再重绑日志，保证包路径与 updater.log 都落在安装根。"""
+    global update_logger
+    install_root = ensure_install_root_cwd()
+    update_logger = setup_update_logger(install_root)
+    return install_root
+
+
 if __name__ == "__main__":
     # 不再启动时删除旧日志，而是追加写入（便于排查历史错误）
-    # 在日志中记录本次更新开始
     import time
 
-    separator = "=" * 60
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    update_logger.info("\n%s\n[%s] 更新程序启动\n%s", separator, timestamp, separator)
-    update_logger.info("更新程序启动, argv=%s", sys.argv)
-
     try:
-        if len(sys.argv) > 1:
-            if sys.argv[1] == "-update":
-                # 解析 -update 后的可选参数（保持兼容：无参数也能运行）
-                import argparse
+        if len(sys.argv) > 1 and sys.argv[1] == "-update":
+            # 先解析参数再 chdir/重绑日志，避免 cwd=MFWUpdater1 时找不到包、日志写错目录
+            _parse_update_runtime_opts(sys.argv[2:])
+            install_root = _bootstrap_install_root_and_logger()
+            separator = "=" * 60
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            update_logger.info(
+                "\n%s\n[%s] 更新程序启动\n%s", separator, timestamp, separator
+            )
+            update_logger.info("更新程序启动, argv=%s", sys.argv)
+            update_logger.info("发行根/工作目录: %s", install_root)
+            standard_update()
+        else:
+            install_root = _bootstrap_install_root_and_logger()
+            separator = "=" * 60
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            update_logger.info(
+                "\n%s\n[%s] 更新程序启动\n%s", separator, timestamp, separator
+            )
+            update_logger.info("更新程序启动, argv=%s", sys.argv)
+            update_logger.info("发行根/工作目录: %s", install_root)
 
-                parser = argparse.ArgumentParser(add_help=False)
-                parser.add_argument(
-                    "--parent-pid",
-                    type=int,
-                    default=None,
-                    help="触发更新器的主程序PID（用于精确等待退出）",
-                )
-                parser.add_argument(
-                    "--parent-create-time",
-                    type=float,
-                    default=None,
-                    help="主程序进程创建时间（防 PID 复用误判）",
-                )
-                parser.add_argument(
-                    "--shutdown-timeout",
-                    type=float,
-                    default=180.0,
-                    help="等待主程序/占用进程退出的超时时间（秒）",
-                )
-                parser.add_argument(
-                    "--wait-poll",
-                    type=float,
-                    default=0.25,
-                    help="等待轮询间隔（秒）",
-                )
-                parser.add_argument(
-                    "--mfw-exe-path",
-                    type=str,
-                    default=None,
-                    help="主程序可执行文件路径（更可靠的占用检测）",
-                )
-                parser.add_argument(
-                    "--startup-executable-name",
-                    type=str,
-                    default=None,
-                    help="触发更新时的主程序文件名（用于更新后恢复原名称）",
-                )
-                # 兼容透传给主程序的 --direct-run（更新器自身不消费，但不能因未知参数失败）
-                parser.add_argument(FLAG_DIRECT_RUN, action="store_true")
-
-                known, _unknown = parser.parse_known_args(sys.argv[2:])
-                RUNTIME_OPTS.parent_pid = known.parent_pid
-                RUNTIME_OPTS.parent_create_time = known.parent_create_time
-                RUNTIME_OPTS.shutdown_timeout = float(known.shutdown_timeout)
-                RUNTIME_OPTS.wait_poll_interval = float(known.wait_poll)
-                RUNTIME_OPTS.mfw_exe_path = known.mfw_exe_path
-                RUNTIME_OPTS.startup_executable_name = known.startup_executable_name
-
-                standard_update()
-            elif sys.argv[1] == "-generate-metadata":
-                target = sys.argv[2] if len(sys.argv) > 2 else None
-                generate_metadata_samples(target)
+            if len(sys.argv) > 1:
+                if sys.argv[1] == "-generate-metadata":
+                    target = sys.argv[2] if len(sys.argv) > 2 else None
+                    generate_metadata_samples(target)
+                else:
+                    mode = input(
+                        "1. 更新模式 / Standard update\n2. 恢复模式 / Recovery update\n"
+                    )
+                    if mode == "1":
+                        standard_update()
+                    elif mode == "2":
+                        recovery_mode()
+                    else:
+                        print("无效输入 / Invalid input")
+                        input("按回车键继续... / Press Enter to continue...")
             else:
                 mode = input(
                     "1. 更新模式 / Standard update\n2. 恢复模式 / Recovery update\n"
@@ -2502,17 +2571,6 @@ if __name__ == "__main__":
                 else:
                     print("无效输入 / Invalid input")
                     input("按回车键继续... / Press Enter to continue...")
-        else:
-            mode = input(
-                "1. 更新模式 / Standard update\n2. 恢复模式 / Recovery update\n"
-            )
-            if mode == "1":
-                standard_update()
-            elif mode == "2":
-                recovery_mode()
-            else:
-                print("无效输入 / Invalid input")
-                input("按回车键继续... / Press Enter to continue...")
     except Exception as e:
         # 捕获所有未处理的异常并记录
         error_message = f"更新程序发生未捕获的异常: {type(e).__name__}: {e}"
